@@ -1,0 +1,62 @@
+@page "/"
+@using Scheduler
+@using Scheduler.Models
+
+<PageTitle>Scheduler sample</PageTitle>
+
+<h1>Scheduler sample</h1>
+
+<div class="sample-toolbar">
+    <button class="btn btn-sm btn-outline-primary" @onclick="() => View = SchedulerView.Month">Month</button>
+    <button class="btn btn-sm btn-outline-primary" @onclick="() => View = SchedulerView.Week">Week</button>
+    <button class="btn btn-sm btn-outline-primary" @onclick="() => View = SchedulerView.Day">Day</button>
+    <button class="btn btn-sm btn-outline-secondary" @onclick="Previous">Previous</button>
+    <button class="btn btn-sm btn-outline-secondary" @onclick="Next">Next</button>
+</div>
+
+<SchedulerComponent CurrentDate="CurrentDate" View="View" Events="Events" OnEventChanged="OnEventChanged" />
+
+@if (LastChange is not null)
+{
+    <p class="mt-3">Moved <strong>@LastChange.Event.Title</strong> from @LastChange.PreviousStart:g to @LastChange.Event.Start:g</p>
+}
+
+@code {
+    private DateTime CurrentDate { get; set; } = DateTime.Today;
+    private SchedulerView View { get; set; } = SchedulerView.Week;
+
+    private SchedulerEventChangedArgs? LastChange { get; set; }
+
+    private IList<SchedulerEvent> Events { get; } =
+    [
+        new SchedulerEvent { Id = "evt-1", Title = "Sprint planning", Start = DateTime.Today.AddHours(9), End = DateTime.Today.AddHours(10), Color = "#2563eb" },
+        new SchedulerEvent { Id = "evt-2", Title = "Design review", Start = DateTime.Today.AddDays(1).AddHours(11), End = DateTime.Today.AddDays(1).AddHours(12.5), Color = "#16a34a" },
+        new SchedulerEvent { Id = "evt-3", Title = "Support", Start = DateTime.Today.AddDays(2).AddHours(14), End = DateTime.Today.AddDays(2).AddHours(15), Color = "#dc2626" }
+    ];
+
+    private void Previous()
+    {
+        CurrentDate = View switch
+        {
+            SchedulerView.Month => CurrentDate.AddMonths(-1),
+            SchedulerView.Week => CurrentDate.AddDays(-7),
+            _ => CurrentDate.AddDays(-1)
+        };
+    }
+
+    private void Next()
+    {
+        CurrentDate = View switch
+        {
+            SchedulerView.Month => CurrentDate.AddMonths(1),
+            SchedulerView.Week => CurrentDate.AddDays(7),
+            _ => CurrentDate.AddDays(1)
+        };
+    }
+
+    private Task OnEventChanged(SchedulerEventChangedArgs args)
+    {
+        LastChange = args;
+        return Task.CompletedTask;
+    }
+}
