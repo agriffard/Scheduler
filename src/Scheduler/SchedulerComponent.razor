@@ -1,0 +1,233 @@
+@using Microsoft.JSInterop
+@using Scheduler.Models
+@implements IAsyncDisposable
+
+<div id="@_rootId" class="scheduler-root">
+    @if (View == SchedulerView.Month)
+    {
+        <div class="scheduler-month-grid">
+            @foreach (var day in GetMonthGridDays())
+            {
+                <div class="scheduler-month-cell @(day.Date == CurrentDate.Date ? "is-current" : string.Empty)">
+                    <div class="scheduler-month-cell-header">@day.Day</div>
+                    @foreach (var evt in Events.Where(e => e.Start.Date == day.Date).OrderBy(e => e.Start).Take(3))
+                    {
+                        <div class="scheduler-event"
+                             data-event-id="@evt.Id"
+                             style="@BuildEventStyle(evt)">
+                            <span class="scheduler-event-title">@evt.Title</span>
+                            <span class="scheduler-resize-handle" title="Resize">⋮</span>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="scheduler-time-grid">
+            <div class="scheduler-time-column">
+                @foreach (var hour in Enumerable.Range(StartHour, EndHour - StartHour + 1))
+                {
+                    <div class="scheduler-time-label">@($"{hour:00}:00")</div>
+                }
+            </div>
+            @foreach (var day in GetVisibleDays())
+            {
+                <div class="scheduler-day-column">
+                    <div class="scheduler-day-header">@day.ToString("ddd dd")</div>
+                    <div class="scheduler-day-body" style="@BuildDayBodyStyle()">
+                        @foreach (var evt in Events.Where(e => e.Start.Date == day.Date).OrderBy(e => e.Start))
+                        {
+                            <div class="scheduler-event"
+                                 data-event-id="@evt.Id"
+                                 style="@BuildEventStyle(evt)">
+                                <span class="scheduler-event-title">@evt.Title</span>
+                                <span class="scheduler-event-time">@evt.Start.ToString("HH:mm") - @evt.End.ToString("HH:mm")</span>
+                                <span class="scheduler-resize-handle" title="Resize">⋮</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private const int HourHeight = 56;
+    private const int MonthCellHeight = 124;
+    private const int DayColumnWidth = 170;
+    private const int MonthCellWidth = 156;
+
+    private readonly string _rootId = $"scheduler-{Guid.NewGuid():N}";
+    private DotNetObjectReference<SchedulerComponent>? _dotNetRef;
+    private IJSObjectReference? _module;
+
+    [Parameter]
+    public DateTime CurrentDate { get; set; } = DateTime.Today;
+
+    [Parameter]
+    public SchedulerView View { get; set; } = SchedulerView.Week;
+
+    [Parameter]
+    public IList<SchedulerEvent> Events { get; set; } = [];
+
+    [Parameter]
+    public EventCallback<SchedulerEventChangedArgs> OnEventChanged { get; set; }
+
+    [Parameter]
+    public int StartHour { get; set; } = 8;
+
+    [Parameter]
+    public int EndHour { get; set; } = 20;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/Scheduler/scheduler.js");
+        _dotNetRef = DotNetObjectReference.Create(this);
+        await _module.InvokeVoidAsync("registerScheduler", _rootId, _dotNetRef);
+    }
+
+    [Inject]
+    private IJSRuntime JS { get; set; } = default!;
+
+    [JSInvokable]
+    public async Task OnEventDragEnd(string eventId, double deltaX, double deltaY)
+    {
+        if (TryGetEvent(eventId, out var evt) is false)
+        {
+            return;
+        }
+
+        var previousStart = evt.Start;
+        var previousEnd = evt.End;
+
+        var delta = View switch
+        {
+            SchedulerView.Month => TimeSpan.FromDays(Math.Round(deltaX / MonthCellWidth) + Math.Round(deltaY / MonthCellHeight) * 7),
+            SchedulerView.Day => TimeSpan.FromMinutes(Math.Round(deltaY / (HourHeight / 60d) / 15d) * 15),
+            _ => TimeSpan.FromDays(Math.Round(deltaX / DayColumnWidth)) + TimeSpan.FromMinutes(Math.Round(deltaY / (HourHeight / 60d) / 15d) * 15)
+        };
+
+        evt.Start = evt.Start.Add(delta);
+        evt.End = evt.End.Add(delta);
+
+        await NotifyChanged(evt, previousStart, previousEnd);
+    }
+
+    [JSInvokable]
+    public async Task OnEventResizeEnd(string eventId, double deltaX, double deltaY)
+    {
+        if (TryGetEvent(eventId, out var evt) is false)
+        {
+            return;
+        }
+
+        var previousStart = evt.Start;
+        var previousEnd = evt.End;
+
+        var delta = View == SchedulerView.Month
+            ? TimeSpan.FromDays(Math.Round(deltaX / MonthCellWidth))
+            : TimeSpan.FromMinutes(Math.Round(deltaY / (HourHeight / 60d) / 15d) * 15);
+
+        var resizedEnd = evt.End.Add(delta);
+        if (resizedEnd <= evt.Start)
+        {
+            resizedEnd = evt.Start.AddMinutes(30);
+        }
+
+        evt.End = resizedEnd;
+
+        await NotifyChanged(evt, previousStart, previousEnd);
+    }
+
+    private async Task NotifyChanged(SchedulerEvent evt, DateTime previousStart, DateTime previousEnd)
+    {
+        if (OnEventChanged.HasDelegate)
+        {
+            await OnEventChanged.InvokeAsync(new SchedulerEventChangedArgs
+            {
+                Event = evt,
+                PreviousStart = previousStart,
+                PreviousEnd = previousEnd
+            });
+        }
+
+        StateHasChanged();
+    }
+
+    private bool TryGetEvent(string eventId, out SchedulerEvent evt)
+    {
+        var match = Events.FirstOrDefault(e => string.Equals(e.Id, eventId, StringComparison.Ordinal));
+        if (match is null)
+        {
+            evt = default!;
+            return false;
+        }
+
+        evt = match;
+        return true;
+    }
+
+    private IEnumerable<DateTime> GetVisibleDays()
+    {
+        if (View == SchedulerView.Day)
+        {
+            yield return CurrentDate.Date;
+            yield break;
+        }
+
+        var weekStart = CurrentDate.Date.AddDays(-(int)CurrentDate.DayOfWeek);
+        for (var i = 0; i < 7; i++)
+        {
+            yield return weekStart.AddDays(i);
+        }
+    }
+
+    private IEnumerable<DateTime> GetMonthGridDays()
+    {
+        var firstOfMonth = new DateTime(CurrentDate.Year, CurrentDate.Month, 1);
+        var start = firstOfMonth.AddDays(-(int)firstOfMonth.DayOfWeek);
+        return Enumerable.Range(0, 42).Select(offset => start.AddDays(offset));
+    }
+
+    private string BuildEventStyle(SchedulerEvent evt)
+    {
+        var background = string.IsNullOrWhiteSpace(evt.Color) ? "#2563eb" : evt.Color;
+
+        if (View == SchedulerView.Month)
+        {
+            return $"background:{background};";
+        }
+
+        var minutesFromStart = Math.Max(0, (evt.Start - evt.Start.Date.AddHours(StartHour)).TotalMinutes);
+        var duration = Math.Max(30, (evt.End - evt.Start).TotalMinutes);
+        var top = minutesFromStart / 60d * HourHeight;
+        var height = duration / 60d * HourHeight;
+
+        return $"background:{background}; top:{top:0.##}px; height:{height:0.##}px;";
+    }
+
+    private string BuildDayBodyStyle()
+    {
+        var totalHours = Math.Max(1, EndHour - StartHour + 1);
+        return $"height:{totalHours * HourHeight}px;";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is not null)
+        {
+            await _module.InvokeVoidAsync("unregisterScheduler", _rootId);
+            await _module.DisposeAsync();
+        }
+
+        _dotNetRef?.Dispose();
+    }
+}
