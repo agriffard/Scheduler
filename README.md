@@ -56,7 +56,6 @@ private Task OnEventChanged(SchedulerEventChangedArgs args)
 - `/src/Scheduler`: NuGet-ready Blazor component library
 - `/samples/Scheduler.SampleApp`: sample app to test the component behavior
 - `/docs`: usage and architecture docs
-- `/.github/workflows`: CI, NuGet publishing and GitHub Pages deployment workflows
 
 ## Local build and test
 
